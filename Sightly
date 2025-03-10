@@ -1,0 +1,11 @@
+<sly data-sly-use.model="com.myproject.core.models.Carousel" data-sly-unwrap></sly>
+<div class="carousel">
+    <div data-sly-list="${model.carouselItems}">
+        <div class="carousel-item">
+            <h2 data-sly-text="${item.title}"></h2>
+            <div data-sly-test="${item.image}">
+                <div data-sly-resource="${item.image @ resourceType='core/wcm/components/image/v2/image'}"></div>
+            </div>
+        </div>
+    </div>
+</div>
