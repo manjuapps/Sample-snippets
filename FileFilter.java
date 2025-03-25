@@ -2,67 +2,55 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
-public class FileFilter {
-
-    public static List<String> getFilteredFiles(String folderPath) {
-        List<String> filteredFiles = new ArrayList<>();
-        File folder = new File(folderPath);
-
-        if (!folder.exists() || !folder.isDirectory()) {
-            System.err.println("Error: Folder '" + folderPath + "' not found.");
-            return filteredFiles; // Return empty list on error
-        }
-
-        String folderName = folder.getName().toLowerCase(); // Get folder name in lowercase
-
-        File[] files = folder.listFiles();
-
-        if (files != null) {
-            for (File file : files) {
-                if (file.isFile() && file.getName().toLowerCase().endsWith(".xml")) {
-                    String fileNameWithoutExtension = file.getName().substring(0, file.getName().lastIndexOf(".")).toLowerCase();
-
-                    if (fileNameWithoutExtension.endsWith("_page") || fileNameWithoutExtension.equals(folderName)) {
-                        filteredFiles.add(file.getAbsolutePath());
-                    }
-                }
-            }
-        }
-
-        return filteredFiles;
-    }
-
-    public static List<String> processAllFolders(String rootFolderPath) {
-        List<String> allFilteredFiles = new ArrayList<>();
-        File rootFolder = new File(rootFolderPath);
-
-        if (!rootFolder.exists() || !rootFolder.isDirectory()) {
-            System.err.println("Error: Root folder '" + rootFolderPath + "' not found.");
-            return allFilteredFiles;
-        }
-
-        File[] subFolders = rootFolder.listFiles(File::isDirectory); // Filter for directories
-
-        if (subFolders != null) {
-            for (File subFolder : subFolders) {
-                List<String> filteredFiles = getFilteredFiles(subFolder.getAbsolutePath());
-                allFilteredFiles.addAll(filteredFiles); // Add all results from subfolder
-            }
-        }
-
-        return allFilteredFiles;
-    }
+public class FileFilterTraversal {
 
     public static void main(String[] args) {
-        String rootFolderPath = "/path/to/your/root/folder"; // Replace with your root folder path
-        List<String> result = processAllFolders(rootFolderPath);
+        // Specify the directory path
+        String folderPath = "your_folder_path_here"; // Change this to the target folder path
 
-        if (!result.isEmpty()) {
-            for (String filePath : result) {
-                System.out.println(filePath);
-            }
-        } else {
-            System.out.println("No matching files found in any subfolders.");
+        File rootFolder = new File(folderPath);
+        if (!rootFolder.exists() || !rootFolder.isDirectory()) {
+            System.out.println("Invalid directory path: " + folderPath);
+            return;
         }
+
+        List<File> filteredFiles = new ArrayList<>();
+        traverseDepthFirst(rootFolder, filteredFiles);
+
+        // Print the filtered files
+        System.out.println("Filtered files:");
+        for (File file : filteredFiles) {
+            System.out.println(file.getAbsolutePath());
+        }
+    }
+
+    private static void traverseDepthFirst(File folder, List<File> filteredFiles) {
+        File[] files = folder.listFiles();
+        if (files == null) return;
+
+        for (File file : files) {
+            if (file.isDirectory()) {
+                traverseDepthFirst(file, filteredFiles); // Recurse for subdirectories
+            } else if (shouldInclude(file)) {
+                filteredFiles.add(file);
+            }
+        }
+    }
+
+    private static boolean shouldInclude(File file) {
+        String fileName = file.getName();
+        File parentFolder = file.getParentFile();
+
+        // Check if the path ends with "external"
+        if (file.getAbsolutePath().contains(File.separator + "external")) {
+            return true;
+        }
+
+        // Check if the file name matches its parent folder name
+        if (parentFolder != null && fileName.equals(parentFolder.getName())) {
+            return true;
+        }
+
+        return false;
     }
 }
