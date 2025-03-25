@@ -13,14 +13,18 @@ public class FileProcessor {
         // Specify the folder path here
         String folderPath = "C:/your/folder/path";
 
-        // List to store the paths of files ending with Page.xml
+        // List to store the paths of matching files
         List<Path> fileList = new ArrayList<>();
 
         // Get the list of files
         try {
             Files.walk(new File(folderPath).toPath())
                     .filter(Files::isRegularFile)
-                    .filter(path -> path.toString().endsWith("Page.xml"))
+                    .filter(path -> {
+                        String fileName = path.getFileName().toString();
+                        String parentFolderName = path.getParent().getFileName().toString();
+                        return fileName.equals(parentFolderName) fileName.endsWith("_Page.xml");
+                    })
                     .forEach(fileList::add);
         } catch (IOException e) {
             System.err.println("Error reading files: " + e.getMessage());
@@ -31,7 +35,7 @@ public class FileProcessor {
         Collections.sort(fileList, Comparator.comparing(Path::toString));
 
         // Print the sorted list
-        System.out.println("Sorted list of Page.xml files:");
+        System.out.println("Sorted list of matching files:");
         fileList.forEach(System.out::println);
 
         // You can now use the fileList for further processing
