@@ -32,16 +32,37 @@ public class FileFilter {
         return filteredFiles;
     }
 
+    public static List<String> processAllFolders(String rootFolderPath) {
+        List<String> allFilteredFiles = new ArrayList<>();
+        File rootFolder = new File(rootFolderPath);
+
+        if (!rootFolder.exists() || !rootFolder.isDirectory()) {
+            System.err.println("Error: Root folder '" + rootFolderPath + "' not found.");
+            return allFilteredFiles;
+        }
+
+        File[] subFolders = rootFolder.listFiles(File::isDirectory); // Filter for directories
+
+        if (subFolders != null) {
+            for (File subFolder : subFolders) {
+                List<String> filteredFiles = getFilteredFiles(subFolder.getAbsolutePath());
+                allFilteredFiles.addAll(filteredFiles); // Add all results from subfolder
+            }
+        }
+
+        return allFilteredFiles;
+    }
+
     public static void main(String[] args) {
-        String folderPath = "/path/to/your/folder"; // Replace with your folder path
-        List<String> result = getFilteredFiles(folderPath);
+        String rootFolderPath = "/path/to/your/root/folder"; // Replace with your root folder path
+        List<String> result = processAllFolders(rootFolderPath);
 
         if (!result.isEmpty()) {
             for (String filePath : result) {
                 System.out.println(filePath);
             }
         } else {
-            System.out.println("No matching files found.");
+            System.out.println("No matching files found in any subfolders.");
         }
     }
 }
