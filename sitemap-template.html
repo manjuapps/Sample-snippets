@@ -1,0 +1,12 @@
+<template data-sly-template.sitemapTemplate="${@ item}">
+    <li>
+        ${item.page.title}
+        <sly data-sly-test="${item.children.size > 0}">
+            <ul>
+                <sly data-sly-list.child="${item.children}">
+                    <sly data-sly-call="${sitemapTemplate @ item=child}"></sly>
+                </sly>
+            </ul>
+        </sly>
+    </li>
+</template>
