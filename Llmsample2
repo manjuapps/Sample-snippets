@@ -1,0 +1,526 @@
+# LangChain AI Agent with Tools
+# Complete implementation with all necessary imports and functionality
+
+# =============================================================================
+# 1. IMPORT ALL NECESSARY PACKAGES AND LIBRARIES FOR BUILDING THE AI AGENT
+# =============================================================================
+
+# Core LangChain imports for building agents
+from langchain.agents import create_agent_executor, create_react_agent, AgentExecutor
+from langchain.agents.react.base import DocstoreExplorer
+from langchain.agents import initialize_agent, AgentType
+from langchain.agents.load_tools import load_tools
+from langchain.agents.tools import Tool
+from langchain.callbacks.manager import CallbackManagerForToolRun
+from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
+
+# =============================================================================
+# 2. IMPORT LIBRARIES FOR CREATING LANGCHAIN AGENTS, TOOLS AND INTERACTING WITH OPENAI
+# =============================================================================
+
+# LangChain OpenAI integration
+from langchain_openai import ChatOpenAI, OpenAI
+from langchain.llms import OpenAI as LangChainOpenAI
+
+# LangChain core components
+from langchain.schema import AIMessage, HumanMessage, SystemMessage
+from langchain.schema.runnable import RunnablePassthrough
+from langchain.schema.output_parser import StrOutputParser
+
+# Prompt templates and chains
+from langchain.prompts import PromptTemplate, ChatPromptTemplate, MessagesPlaceholder
+from langchain.prompts.chat import SystemMessagePromptTemplate, HumanMessagePromptTemplate
+from langchain.chains import LLMChain, ConversationChain, SequentialChain
+from langchain.chains.llm_math.base import LLMMathChain
+from langchain.chains.summarize import load_summarize_chain
+
+# Memory components
+from langchain.memory import ConversationBufferMemory, ConversationSummaryMemory
+from langchain.memory import ConversationBufferWindowMemory
+
+# Tools for the agent
+from langchain_community.tools import DuckDuckGoSearchRun, DuckDuckGoSearchResults
+from langchain.tools import WikipediaQueryRun, ShellTool
+from langchain_community.utilities import WikipediaAPIWrapper
+from langchain.tools.file_management import (
+    ReadFileTool,
+    CopyFileTool,
+    DeleteFileTool,
+    MoveFileTool,
+    WriteFileTool,
+    ListDirectoryTool,
+)
+
+# Document processing
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.document_loaders import TextLoader, PyPDFLoader
+from langchain.vectorstores import FAISS, Chroma
+from langchain.embeddings import OpenAIEmbeddings
+
+# =============================================================================
+# 3. IMPORT STANDARD PYTHON LIBRARIES FOR FILE HANDLING AND SYSTEM OPERATIONS
+# =============================================================================
+
+# Standard Python libraries
+import os
+import sys
+import json
+import logging
+import warnings
+import traceback
+from typing import List, Dict, Any, Optional, Union, Callable
+from datetime import datetime, timedelta
+import time
+import re
+import subprocess
+from pathlib import Path
+
+# File and data handling
+import pickle
+import csv
+import yaml
+from io import StringIO, BytesIO
+
+# HTTP and web requests
+import requests
+from urllib.parse import urlparse, urljoin
+
+# Environment variables
+from dotenv import load_dotenv
+import getpass
+
+# =============================================================================
+# 4. SETUP AND CONFIGURATION
+# =============================================================================
+
+# Load environment variables
+load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Suppress warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+class LangChainAIAgent:
+    """
+    A comprehensive LangChain AI Agent with multiple tools and capabilities.
+    """
+    
+    def __init__(self, openai_api_key: str = None, model_name: str = "gpt-3.5-turbo"):
+        """
+        Initialize the LangChain AI Agent.
+        
+        Args:
+            openai_api_key (str): OpenAI API key
+            model_name (str): OpenAI model to use
+        """
+        # Get API key
+        if not openai_api_key:
+            openai_api_key = os.getenv("OPENAI_API_KEY") or self._get_api_key()
+        
+        # =============================================================================
+        # 4. USE CHATOPENAI FOR GENERATING TEXT RESPONSES
+        # =============================================================================
+        
+        # Initialize ChatOpenAI for text generation
+        self.llm = ChatOpenAI(
+            api_key=openai_api_key,
+            model=model_name,
+            temperature=0.7,
+            max_tokens=1000,
+            streaming=True,
+            callbacks=[StreamingStdOutCallbackHandler()]
+        )
+        
+        # Alternative OpenAI LLM for specific chains
+        self.openai_llm = OpenAI(
+            api_key=openai_api_key,
+            model_name="gpt-3.5-turbo-instruct",
+            temperature=0.7,
+            max_tokens=1000
+        )
+        
+        # =============================================================================
+        # 5. USE PROMPT TEMPLATE TO STRUCTURE LLM INPUT
+        # =============================================================================
+        
+        # Create various prompt templates
+        self.setup_prompt_templates()
+        
+        # =============================================================================
+        # 6. USE LLMCHAIN FOR CHAINING PROMPTS AND LLM CALLS
+        # =============================================================================
+        
+        # Setup LLM chains
+        self.setup_llm_chains()
+        
+        # =============================================================================
+        # 7. SETUP TOOLS AND AGENT EXECUTOR
+        # =============================================================================
+        
+        # Initialize tools
+        self.tools = self.setup_tools()
+        
+        # Setup agent and executor
+        self.setup_agent()
+        
+        logger.info("LangChain AI Agent initialized successfully!")
+    
+    def _get_api_key(self) -> str:
+        """Get OpenAI API key from user input or file."""
+        try:
+            # Try to read from file first
+            if os.path.exists("openai_key.txt"):
+                with open("openai_key.txt", "r") as f:
+                    api_key = f.read().strip()
+                if api_key:
+                    return api_key
+        except:
+            pass
+        
+        # Ask user for API key
+        api_key = getpass.getpass("Please enter your OpenAI API key: ")
+        
+        # Save to file for future use
+        try:
+            with open("openai_key.txt", "w") as f:
+                f.write(api_key)
+            logger.info("API key saved to openai_key.txt")
+        except:
+            logger.warning("Could not save API key to file")
+        
+        return api_key
+    
+    def setup_prompt_templates(self):
+        """Setup various prompt templates for different tasks."""
+        
+        # Basic prompt template
+        self.basic_prompt = PromptTemplate(
+            input_variables=["input"],
+            template="You are a helpful AI assistant. Please respond to: {input}"
+        )
+        
+        # Chat prompt template with system message
+        self.chat_prompt = ChatPromptTemplate.from_messages([
+            SystemMessagePromptTemplate.from_template(
+                "You are a helpful AI assistant with access to various tools. "
+                "Use the tools when necessary to provide accurate and helpful responses."
+            ),
+            HumanMessagePromptTemplate.from_template("{input}")
+        ])
+        
+        # ReAct agent prompt template
+        self.react_prompt = PromptTemplate(
+            input_variables=["tools", "tool_names", "input", "agent_scratchpad"],
+            template=\"\"\"Answer the following questions as best you can. You have access to the following tools:
+
+{tools}
+
+Use the following format:
+
+Question: the input question you must answer
+Thought: you should always think about what to do
+Action: the action to take, should be one of [{tool_names}]
+Action Input: the input to the action
+Observation: the result of the action
+... (this Thought/Action/Action Input/Observation can repeat N times)
+Thought: I now know the final answer
+Final Answer: the final answer to the original input question
+
+Begin!
+
+Question: {input}
+Thought: {agent_scratchpad}\"\"\"
+        )
+        
+        # Conversation prompt with memory
+        self.conversation_prompt = PromptTemplate(
+            input_variables=["history", "input"],
+            template=\"\"\"The following is a friendly conversation between a human and an AI assistant. 
+The assistant is helpful, creative, clever, and very friendly.
+
+{history}
+Human: {input}
+AI Assistant:\"\"\"
+        )
+    
+    def setup_llm_chains(self):
+        """Setup various LLM chains for different purposes."""
+        
+        # Basic LLM chain
+        self.basic_chain = LLMChain(
+            llm=self.llm,
+            prompt=self.basic_prompt,
+            verbose=True
+        )
+        
+        # Conversation chain with memory
+        self.memory = ConversationBufferMemory(
+            memory_key="history",
+            return_messages=True
+        )
+        
+        self.conversation_chain = ConversationChain(
+            llm=self.llm,
+            memory=self.memory,
+            prompt=self.conversation_prompt,
+            verbose=True
+        )
+        
+        # Math chain for solving mathematical problems
+        self.math_chain = LLMMathChain.from_llm(
+            llm=self.openai_llm,
+            verbose=True
+        )
+    
+    def setup_tools(self) -> List[Tool]:
+        """Setup tools for the agent."""
+        
+        tools = []
+        
+        # =============================================================================
+        # WEB SEARCH TOOL - DuckDuckGo Search
+        # =============================================================================
+        
+        try:
+            # DuckDuckGo search tool
+            search_tool = DuckDuckGoSearchRun(
+                name="web_search",
+                description="Use this tool to search the internet for current information, news, facts, and general knowledge queries."
+            )
+            tools.append(search_tool)
+            logger.info("DuckDuckGo search tool added")
+        except Exception as e:
+            logger.error(f"Failed to setup DuckDuckGo search tool: {e}")
+        
+        # =============================================================================
+        # MATH TOOL - LLMMathChain for solving math problems
+        # =============================================================================
+        
+        try:
+            # Math calculation tool
+            math_tool = Tool(
+                name="calculator",
+                description="Use this tool to solve mathematical problems, calculations, and equations. Input should be a mathematical expression or word problem.",
+                func=self.math_chain.run
+            )
+            tools.append(math_tool)
+            logger.info("Math calculation tool added")
+        except Exception as e:
+            logger.error(f"Failed to setup math tool: {e}")
+        
+        # =============================================================================
+        # FILE MANAGEMENT TOOLS
+        # =============================================================================
+        
+        try:
+            # File reading tool
+            read_file_tool = ReadFileTool()
+            tools.append(read_file_tool)
+            
+            # File writing tool
+            write_file_tool = WriteFileTool()
+            tools.append(write_file_tool)
+            
+            # Directory listing tool
+            list_dir_tool = ListDirectoryTool()
+            tools.append(list_dir_tool)
+            
+            logger.info("File management tools added")
+        except Exception as e:
+            logger.error(f"Failed to setup file management tools: {e}")
+        
+        # =============================================================================
+        # WIKIPEDIA SEARCH TOOL
+        # =============================================================================
+        
+        try:
+            wikipedia = WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper())
+            tools.append(wikipedia)
+            logger.info("Wikipedia search tool added")
+        except Exception as e:
+            logger.error(f"Failed to setup Wikipedia tool: {e}")
+        
+        # =============================================================================
+        # CUSTOM TOOLS
+        # =============================================================================
+        
+        # Custom tool for getting current time
+        def get_current_time(input_text: str) -> str:
+            """Get the current date and time."""
+            return f"Current date and time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        
+        time_tool = Tool(
+            name="get_current_time",
+            description="Use this tool to get the current date and time.",
+            func=get_current_time
+        )
+        tools.append(time_tool)
+        
+        # Custom tool for Python code execution (be careful with this in production)
+        def execute_python_code(code: str) -> str:
+            """Execute Python code safely (limited functionality)."""
+            try:
+                # Only allow safe operations
+                if any(dangerous in code.lower() for dangerous in ['import os', 'import sys', 'exec', 'eval', 'open', 'file']):
+                    return "Code execution denied: potentially unsafe operations detected."
+                
+                # Execute safe mathematical and string operations
+                local_vars = {"__builtins__": {}}
+                result = eval(code, {"__builtins__": {}}, local_vars)
+                return f"Result: {result}"
+            except Exception as e:
+                return f"Error executing code: {str(e)}"
+        
+        python_tool = Tool(
+            name="python_calculator",
+            description="Execute simple Python expressions for calculations. Only basic math operations are allowed.",
+            func=execute_python_code
+        )
+        tools.append(python_tool)
+        
+        logger.info(f"Total {len(tools)} tools initialized")
+        return tools
+    
+    def setup_agent(self):
+        """Setup the ReAct agent with tools using create_agent_executor."""
+        
+        try:
+            # =============================================================================
+            # USE create_agent_executor(llm, tools) - STREAMLINED APPROACH
+            # =============================================================================
+            
+            # Method 1: Using create_agent_executor (recommended)
+            self.agent_executor = create_agent_executor(
+                llm=self.llm,
+                tools=self.tools,
+                verbose=True,
+                handle_parsing_errors=True,
+                max_iterations=5,
+                max_execution_time=30,
+                return_intermediate_steps=True
+            )
+            
+            logger.info("Agent executor created successfully using create_agent_executor")
+            
+        except Exception as e:
+            logger.error(f"Failed to setup agent with create_agent_executor: {e}")
+            
+            # Fallback Method 2: Using create_react_agent + AgentExecutor
+            try:
+                logger.info("Trying fallback method with create_react_agent...")
+                
+                # Create ReAct agent
+                self.agent = create_react_agent(
+                    llm=self.llm,
+                    tools=self.tools,
+                    prompt=self.react_prompt
+                )
+                
+                # Create agent executor
+                self.agent_executor = AgentExecutor(
+                    agent=self.agent,
+                    tools=self.tools,
+                    verbose=True,
+                    handle_parsing_errors=True,
+                    max_iterations=5,
+                    max_execution_time=30,
+                    return_intermediate_steps=True
+                )
+                
+                logger.info("Fallback ReAct agent and executor setup completed")
+                
+            except Exception as fallback_error:
+                logger.error(f"Fallback create_react_agent also failed: {fallback_error}")
+                
+                # Fallback Method 3: Using initialize_agent
+                try:
+                    logger.info("Trying final fallback with initialize_agent...")
+                    
+                    self.agent_executor = initialize_agent(
+                        tools=self.tools,
+                        llm=self.llm,
+                        agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+                        verbose=True,
+                        handle_parsing_errors=True,
+                        max_iterations=5
+                    )
+                    logger.info("Final fallback agent setup completed")
+                    
+                except Exception as final_error:
+                    logger.error(f"All agent setup methods failed: {final_error}")
+                    raise
+    
+    def run(self, query: str) -> str:
+        """
+        Run a query through the agent.
+        
+        Args:
+            query (str): The query to process
+            
+        Returns:
+            str: The agent's response
+        """
+        try:
+            logger.info(f"Processing query: {query}")
+            result = self.agent_executor.invoke({"input": query})
+            return result.get("output", "No output generated")
+        except Exception as e:
+            logger.error(f"Error processing query: {e}")
+            return f"Error: {str(e)}"
+    
+    def run_and_save(self, query: str, output_file_path: str = "ai_agent_output.json") -> Dict[str, Any]:
+        """
+        Run a query and save the complete output to a file.
+        
+        Args:
+            query (str): The query to process
+            output_file_path (str): Path to save the output file
+            
+        Returns:
+            Dict[str, Any]: Complete result dictionary
+        """
+        return run_agent_query_and_save_output(self.agent_executor, query, output_file_path)
+
+
+# =============================================================================
+# UTILITY FUNCTION FOR RUNNING QUERIES AND SAVING OUTPUT
+# =============================================================================
+
+def run_agent_query_and_save_output(agent_executor, query: str, output_file_path: str = "ai_agent_output.json") -> Dict[str, Any]:
+    """
+    Run a query through the agent executor and save the complete output to a file.
+    
+    Args:
+        agent_executor: The LangChain agent executor
+        query (str): The query to process
+        output_file_path (str): Path to save the output file (JSON format)
+        
+    Returns:
+        Dict[str, Any]: Complete result dictionary with metadata
+    """
+    
+    # Record start time
+    start_time = datetime.now()
+    
+    # Initialize result structure
+    result_data = {
+        "query": query,
+        "timestamp": start_time.isoformat(),
+        "status": "pending",
+        "output": None,
+        "intermediate_steps": [],
+        "execution_time_seconds": None,
+        "error": None,
+        "metadata": {
+            "agent_type": type(agent_executor).__name__,
+            "tools_used": [],
+            "total_steps": 0
+        }
+    }
+    
+    try:
+        logger.info(f"Executing query: {query}")
+        logger.info(f"Output will be saved to: {outp
