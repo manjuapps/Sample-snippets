@@ -1,0 +1,528 @@
+# LangChain AI Agent with Tools
+# Complete implementation with all necessary imports and functionality
+
+# =============================================================================
+# 1. IMPORT ALL NECESSARY PACKAGES AND LIBRARIES FOR BUILDING THE AI AGENT
+# =============================================================================
+
+# Core LangChain imports for building agents
+from langchain.agents import create_react_agent, AgentExecutor
+from langchain.agents.react.base import DocstoreExplorer
+from langchain.agents import initialize_agent, AgentType
+from langchain.agents.load_tools import load_tools
+from langchain.agents.tools import Tool
+from langchain.callbacks.manager import CallbackManagerForToolRun
+from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
+
+# =============================================================================
+# 2. IMPORT LIBRARIES FOR CREATING LANGCHAIN AGENTS, TOOLS AND INTERACTING WITH OPENAI
+# =============================================================================
+
+# LangChain OpenAI integration
+from langchain_openai import ChatOpenAI, OpenAI
+from langchain.llms import OpenAI as LangChainOpenAI
+
+# LangChain core components
+from langchain.schema import AIMessage, HumanMessage, SystemMessage
+from langchain.schema.runnable import RunnablePassthrough
+from langchain.schema.output_parser import StrOutputParser
+
+# Prompt templates and chains
+from langchain.prompts import PromptTemplate, ChatPromptTemplate, MessagesPlaceholder
+from langchain.prompts.chat import SystemMessagePromptTemplate, HumanMessagePromptTemplate
+from langchain.chains import LLMChain, ConversationChain, SequentialChain
+from langchain.chains.llm_math.base import LLMMathChain
+from langchain.chains.summarize import load_summarize_chain
+
+# Memory components
+from langchain.memory import ConversationBufferMemory, ConversationSummaryMemory
+from langchain.memory import ConversationBufferWindowMemory
+
+# Tools for the agent
+from langchain_community.tools import DuckDuckGoSearchRun, DuckDuckGoSearchResults
+from langchain.tools import WikipediaQueryRun, ShellTool
+from langchain_community.utilities import WikipediaAPIWrapper
+from langchain.tools.file_management import (
+    ReadFileTool,
+    CopyFileTool,
+    DeleteFileTool,
+    MoveFileTool,
+    WriteFileTool,
+    ListDirectoryTool,
+)
+
+# Document processing
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.document_loaders import TextLoader, PyPDFLoader
+from langchain.vectorstores import FAISS, Chroma
+from langchain.embeddings import OpenAIEmbeddings
+
+# =============================================================================
+# 3. IMPORT STANDARD PYTHON LIBRARIES FOR FILE HANDLING AND SYSTEM OPERATIONS
+# =============================================================================
+
+# Standard Python libraries
+import os
+import sys
+import json
+import logging
+import warnings
+import traceback
+from typing import List, Dict, Any, Optional, Union, Callable
+from datetime import datetime, timedelta
+import time
+import re
+import subprocess
+from pathlib import Path
+
+# File and data handling
+import pickle
+import csv
+import yaml
+from io import StringIO, BytesIO
+
+# HTTP and web requests
+import requests
+from urllib.parse import urlparse, urljoin
+
+# Environment variables
+from dotenv import load_dotenv
+import getpass
+
+# =============================================================================
+# 4. SETUP AND CONFIGURATION
+# =============================================================================
+
+# Load environment variables
+load_dotenv()
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Suppress warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+class LangChainAIAgent:
+    """
+    A comprehensive LangChain AI Agent with multiple tools and capabilities.
+    """
+    
+    def __init__(self, openai_api_key: str = None, model_name: str = "gpt-3.5-turbo"):
+        """
+        Initialize the LangChain AI Agent.
+        
+        Args:
+            openai_api_key (str): OpenAI API key
+            model_name (str): OpenAI model to use
+        """
+        # Get API key
+        if not openai_api_key:
+            openai_api_key = os.getenv("OPENAI_API_KEY") or self._get_api_key()
+        
+        # =============================================================================
+        # 4. USE CHATOPENAI FOR GENERATING TEXT RESPONSES
+        # =============================================================================
+        
+        # Initialize ChatOpenAI for text generation
+        self.llm = ChatOpenAI(
+            api_key=openai_api_key,
+            model=model_name,
+            temperature=0.7,
+            max_tokens=1000,
+            streaming=True,
+            callbacks=[StreamingStdOutCallbackHandler()]
+        )
+        
+        # Alternative OpenAI LLM for specific chains
+        self.openai_llm = OpenAI(
+            api_key=openai_api_key,
+            model_name="gpt-3.5-turbo-instruct",
+            temperature=0.7,
+            max_tokens=1000
+        )
+        
+        # =============================================================================
+        # 5. USE PROMPT TEMPLATE TO STRUCTURE LLM INPUT
+        # =============================================================================
+        
+        # Create various prompt templates
+        self.setup_prompt_templates()
+        
+        # =============================================================================
+        # 6. USE LLMCHAIN FOR CHAINING PROMPTS AND LLM CALLS
+        # =============================================================================
+        
+        # Setup LLM chains
+        self.setup_llm_chains()
+        
+        # =============================================================================
+        # 7. SETUP TOOLS AND AGENT EXECUTOR
+        # =============================================================================
+        
+        # Initialize tools
+        self.tools = self.setup_tools()
+        
+        # Setup agent and executor
+        self.setup_agent()
+        
+        logger.info("LangChain AI Agent initialized successfully!")
+    
+    def _get_api_key(self) -> str:
+        """Get OpenAI API key from user input or file."""
+        try:
+            # Try to read from file first
+            if os.path.exists("openai_key.txt"):
+                with open("openai_key.txt", "r") as f:
+                    api_key = f.read().strip()
+                if api_key:
+                    return api_key
+        except:
+            pass
+        
+        # Ask user for API key
+        api_key = getpass.getpass("Please enter your OpenAI API key: ")
+        
+        # Save to file for future use
+        try:
+            with open("openai_key.txt", "w") as f:
+                f.write(api_key)
+            logger.info("API key saved to openai_key.txt")
+        except:
+            logger.warning("Could not save API key to file")
+        
+        return api_key
+    
+    def setup_prompt_templates(self):
+        """Setup various prompt templates for different tasks."""
+        
+        # Basic prompt template
+        self.basic_prompt = PromptTemplate(
+            input_variables=["input"],
+            template="You are a helpful AI assistant. Please respond to: {input}"
+        )
+        
+        # Chat prompt template with system message
+        self.chat_prompt = ChatPromptTemplate.from_messages([
+            SystemMessagePromptTemplate.from_template(
+                "You are a helpful AI assistant with access to various tools. "
+                "Use the tools when necessary to provide accurate and helpful responses."
+            ),
+            HumanMessagePromptTemplate.from_template("{input}")
+        ])
+        
+        # ReAct agent prompt template
+        self.react_prompt = PromptTemplate(
+            input_variables=["tools", "tool_names", "input", "agent_scratchpad"],
+            template=\"\"\"Answer the following questions as best you can. You have access to the following tools:
+
+{tools}
+
+Use the following format:
+
+Question: the input question you must answer
+Thought: you should always think about what to do
+Action: the action to take, should be one of [{tool_names}]
+Action Input: the input to the action
+Observation: the result of the action
+... (this Thought/Action/Action Input/Observation can repeat N times)
+Thought: I now know the final answer
+Final Answer: the final answer to the original input question
+
+Begin!
+
+Question: {input}
+Thought: {agent_scratchpad}\"\"\"
+        )
+        
+        # Conversation prompt with memory
+        self.conversation_prompt = PromptTemplate(
+            input_variables=["history", "input"],
+            template=\"\"\"The following is a friendly conversation between a human and an AI assistant. 
+The assistant is helpful, creative, clever, and very friendly.
+
+{history}
+Human: {input}
+AI Assistant:\"\"\"
+        )
+    
+    def setup_llm_chains(self):
+        """Setup various LLM chains for different purposes."""
+        
+        # Basic LLM chain
+        self.basic_chain = LLMChain(
+            llm=self.llm,
+            prompt=self.basic_prompt,
+            verbose=True
+        )
+        
+        # Conversation chain with memory
+        self.memory = ConversationBufferMemory(
+            memory_key="history",
+            return_messages=True
+        )
+        
+        self.conversation_chain = ConversationChain(
+            llm=self.llm,
+            memory=self.memory,
+            prompt=self.conversation_prompt,
+            verbose=True
+        )
+        
+        # Math chain for solving mathematical problems
+        self.math_chain = LLMMathChain.from_llm(
+            llm=self.openai_llm,
+            verbose=True
+        )
+    
+    def setup_tools(self) -> List[Tool]:
+        """Setup tools for the agent."""
+        
+        tools = []
+        
+        # =============================================================================
+        # WEB SEARCH TOOL - DuckDuckGo Search
+        # =============================================================================
+        
+        try:
+            # DuckDuckGo search tool
+            search_tool = DuckDuckGoSearchRun(
+                name="web_search",
+                description="Use this tool to search the internet for current information, news, facts, and general knowledge queries."
+            )
+            tools.append(search_tool)
+            logger.info("DuckDuckGo search tool added")
+        except Exception as e:
+            logger.error(f"Failed to setup DuckDuckGo search tool: {e}")
+        
+        # =============================================================================
+        # MATH TOOL - LLMMathChain for solving math problems
+        # =============================================================================
+        
+        try:
+            # Math calculation tool
+            math_tool = Tool(
+                name="calculator",
+                description="Use this tool to solve mathematical problems, calculations, and equations. Input should be a mathematical expression or word problem.",
+                func=self.math_chain.run
+            )
+            tools.append(math_tool)
+            logger.info("Math calculation tool added")
+        except Exception as e:
+            logger.error(f"Failed to setup math tool: {e}")
+        
+        # =============================================================================
+        # FILE MANAGEMENT TOOLS
+        # =============================================================================
+        
+        try:
+            # File reading tool
+            read_file_tool = ReadFileTool()
+            tools.append(read_file_tool)
+            
+            # File writing tool
+            write_file_tool = WriteFileTool()
+            tools.append(write_file_tool)
+            
+            # Directory listing tool
+            list_dir_tool = ListDirectoryTool()
+            tools.append(list_dir_tool)
+            
+            logger.info("File management tools added")
+        except Exception as e:
+            logger.error(f"Failed to setup file management tools: {e}")
+        
+        # =============================================================================
+        # WIKIPEDIA SEARCH TOOL
+        # =============================================================================
+        
+        try:
+            wikipedia = WikipediaQueryRun(api_wrapper=WikipediaAPIWrapper())
+            tools.append(wikipedia)
+            logger.info("Wikipedia search tool added")
+        except Exception as e:
+            logger.error(f"Failed to setup Wikipedia tool: {e}")
+        
+        # =============================================================================
+        # CUSTOM TOOLS
+        # =============================================================================
+        
+        # Custom tool for getting current time
+        def get_current_time(input_text: str) -> str:
+            """Get the current date and time."""
+            return f"Current date and time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        
+        time_tool = Tool(
+            name="get_current_time",
+            description="Use this tool to get the current date and time.",
+            func=get_current_time
+        )
+        tools.append(time_tool)
+        
+        # Custom tool for Python code execution (be careful with this in production)
+        def execute_python_code(code: str) -> str:
+            """Execute Python code safely (limited functionality)."""
+            try:
+                # Only allow safe operations
+                if any(dangerous in code.lower() for dangerous in ['import os', 'import sys', 'exec', 'eval', 'open', 'file']):
+                    return "Code execution denied: potentially unsafe operations detected."
+                
+                # Execute safe mathematical and string operations
+                local_vars = {"__builtins__": {}}
+                result = eval(code, {"__builtins__": {}}, local_vars)
+                return f"Result: {result}"
+            except Exception as e:
+                return f"Error executing code: {str(e)}"
+        
+        python_tool = Tool(
+            name="python_calculator",
+            description="Execute simple Python expressions for calculations. Only basic math operations are allowed.",
+            func=execute_python_code
+        )
+        tools.append(python_tool)
+        
+        logger.info(f"Total {len(tools)} tools initialized")
+        return tools
+    
+    def setup_agent(self):
+        """Setup the ReAct agent with tools."""
+        
+        try:
+            # =============================================================================
+            # USE AGENT EXECUTOR WITH CREATE_REACT_AGENT
+            # =============================================================================
+            
+            # Create ReAct agent
+            self.agent = create_react_agent(
+                llm=self.llm,
+                tools=self.tools,
+                prompt=self.react_prompt
+            )
+            
+            # Create agent executor
+            self.agent_executor = AgentExecutor(
+                agent=self.agent,
+                tools=self.tools,
+                verbose=True,
+                handle_parsing_errors=True,
+                max_iterations=5,
+                max_execution_time=30,
+                return_intermediate_steps=True
+            )
+            
+            logger.info("ReAct agent and executor setup completed")
+            
+        except Exception as e:
+            logger.error(f"Failed to setup agent: {e}")
+            # Fallback to initialize_agent if create_react_agent fails
+            try:
+                self.agent_executor = initialize_agent(
+                    tools=self.tools,
+                    llm=self.llm,
+                    agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+                    verbose=True,
+                    handle_parsing_errors=True,
+                    max_iterations=5
+                )
+                logger.info("Fallback agent setup completed")
+            except Exception as fallback_error:
+                logger.error(f"Fallback agent setup also failed: {fallback_error}")
+                raise
+    
+    def run(self, query: str) -> str:
+        """
+        Run a query through the agent.
+        
+        Args:
+            query (str): The query to process
+            
+        Returns:
+            str: The agent's response
+        """
+        try:
+            logger.info(f"Processing query: {query}")
+            result = self.agent_executor.invoke({"input": query})
+            return result.get("output", "No output generated")
+        except Exception as e:
+            logger.error(f"Error processing query: {e}")
+            return f"Error: {str(e)}"
+    
+    def chat(self):
+        """Interactive chat interface."""
+        print("🤖 LangChain AI Agent Chat Interface")
+        print("Type 'quit', 'exit', or 'bye' to end the conversation.")
+        print("-" * 50)
+        
+        while True:
+            try:
+                user_input = input("\n👤 You: ").strip()
+                
+                if user_input.lower() in ['quit', 'exit', 'bye', 'q']:
+                    print("👋 Goodbye!")
+                    break
+                
+                if not user_input:
+                    continue
+                
+                print("\n🤖 Agent: ", end="")
+                response = self.run(user_input)
+                print(f"\n{response}")
+                
+            except KeyboardInterrupt:
+                print("\n\n👋 Chat interrupted. Goodbye!")
+                break
+            except Exception as e:
+                print(f"\n❌ Error: {e}")
+
+# =============================================================================
+# USAGE EXAMPLES AND TESTING
+# =============================================================================
+
+def main():
+    """Main function to demonstrate the AI agent."""
+    
+    print("🚀 Initializing LangChain AI Agent...")
+    
+    try:
+        # Initialize the agent
+        agent = LangChainAIAgent()
+        
+        # Example queries to test the agent
+        test_queries = [
+            "What is the current time?",
+            "Calculate 25 * 47 + 138",
+            "Search for the latest news about artificial intelligence",
+            "What is the capital of France?",
+            "Solve this math problem: If a train travels 120 miles in 2 hours, what is its average speed?",
+        ]
+        
+        print("\n🧪 Testing the agent with sample queries...")
+        
+        for i, query in enumerate(test_queries, 1):
+            print(f"\n{'='*60}")
+            print(f"Test {i}: {query}")
+            print('='*60)
+            
+            try:
+                response = agent.run(query)
+                print(f"Response: {response}")
+            except Exception as e:
+                print(f"Error: {e}")
+            
+            # Small delay between queries
+            time.sleep(1)
+        
+        print(f"\n{'='*60}")
+        print("🎉 Testing completed! Starting interactive chat...")
+        print('='*60)
+        
+        # Start interactive chat
+        agent.chat()
+        
+    except Exception as e:
+        logger.error(f"Failed to initialize agent: {e}")
+        print(f"❌ Error: {e}")
+        traceback.print_exc()
+
+if __name__ == "__main__":
+    main()
